@@ -211,7 +211,7 @@ void Adafruit_SSD1306::begin(uint8_t vccstate, uint8_t i2caddr, bool reset) {
     TWI1->TWI_CWGR = 0;
     TWI1->TWI_CWGR = ((VARIANT_MCK / (2 * 400000)) - 4) * 0x101;
 #elif ARDUINO >= 157 // Send data MUCH faster to display
-    Wire.setClock(400000UL); // Set I2C frequency to 400kHz
+    Wire.setClock(800000UL); // Set I2C frequency to 400kHz
 #endif
   }
   if ((reset) && (rst >= 0)) {

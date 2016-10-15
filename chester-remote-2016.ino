@@ -1,23 +1,39 @@
+
 // ================================================================
-// ===                      Library Includes                    ===
+// ===               2.4Ghz Transceiver Includes                ===
 // ================================================================
-#include <SPI.h>    // Library for SPI communications used by the nRF24L01 radio
+#include <SPI.h>  // Library for SPI communications used by the nRF24L01 radio
 #include <Wire.h>
+#include "libs/RadioHead/RH_NRF24.h"        // Max we can send is 28 bytes of data 
+#include "libs/RadioHead/RH_NRF24.cpp"
+#include "libs/RadioHead/RHGenericSPI.h"
+#include "libs/RadioHead/RHGenericSPI.cpp"
+#include "libs/RadioHead/RHHardwareSPI.h"
+#include "libs/RadioHead/RHHardwareSPI.cpp"
+#include "libs/RadioHead/RadioHead.h"
+#include "libs/RadioHead/RHGenericDriver.h"
+#include "libs/RadioHead/RHGenericDriver.cpp"
+#include "libs/RadioHead/RHNRFSPIDriver.h"
+#include "libs/RadioHead/RHNRFSPIDriver.cpp"
 
-// local graphics library include
-#include "libs/Adafruit_GFX_local/Adafruit_GFX_local.h"
-#include "libs/Adafruit_GFX_local/Adafruit_GFX_local.cpp"
-#include "libs/Adafruit_SSD1306_local/Adafruit_SSD1306_local.h"
-#include "libs/Adafruit_SSD1306_local/Adafruit_SSD1306_local.cpp"
-#include "libs/Adafruit_GFX_local/Fonts/TomThumb.h"
-
-#include <EEPROM.h>          // EEPROM library to store non volatile channel varaible
-#include <RH_NRF24.h>        // Max we can send is 28 bytes of data 
 RH_NRF24 nrf24(14, 10);      //CE, CSN
 
+// ================================================================
+// ===                  OLED Display Includes                   ===
+// ================================================================
+
+#include "libs/Adafruit_GFX/Adafruit_GFX.h"
+#include "libs/Adafruit_GFX/Adafruit_GFX.cpp"
+#include "libs/Adafruit_SSD1306/Adafruit_SSD1306.h"
+#include "libs/Adafruit_SSD1306/Adafruit_SSD1306.cpp"
+#include "libs/Adafruit_GFX/Fonts/TomThumb.h"
 #define OLED_RESET 3
 Adafruit_SSD1306 display(OLED_RESET);
 
+// ================================================================
+// ===                     EEPROM Includes                      ===
+// ================================================================
+#include <EEPROM.h>          // EEPROM library to store non volatile channel varaible
 // ================================================================
 // ===                      Robot Pin Defines                   ===
 // ================================================================
@@ -71,14 +87,17 @@ Adafruit_SSD1306 display(OLED_RESET);
 
 uint8_t sendBuffer[2]; //array of unsigned 8-bit type - 28 is the max message length for the nrf24L01 radio
 
-uint8_t receiveBuffer[7];
-uint8_t len = sizeof(receiveBuffer);
-
 unsigned char buttons = 0; // holds current value of all 8 buttons using bit values
 unsigned char buttons2 = 0; // holds current value of all 8 buttons using bit values
 
 unsigned char txChannel = 0; // Channel for the NRF24l01 transmitter 0-83 valid
-int received; // the receive variable type must be the same as the type being received
+
+uint8_t rcvBuffer[7];
+uint8_t len = sizeof(rcvBuffer);
+bool rcvState;
+
+unsigned long loopTime;
+unsigned long lastMillis;
 
 long readVcc() {
   long result;
@@ -232,7 +251,9 @@ void setup()
   // Defaults after init are 2.402 GHz (channel 2), 2Mbps, 0dBm
   txChannel = EEPROM.read(0);
   nrf24.setChannel(txChannel); // Set the desired Transceiver channel valid values are 0-127, in the US only channels 0-83 are within legal bands
-  nrf24.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm);    
+  nrf24.setRF(RH_NRF24::DataRate2Mbps, RH_NRF24::TransmitPower0dBm);   
+//  #define addressNRF 0xE7E7E7E7E4
+//  nrf24.setNetworkAddress(addressNRF,sizeof(addressNRF));
 
 // ===================++===========================================
 // ===                     OLED Display Setup                   ===
@@ -244,9 +265,9 @@ void setup()
   display.clearDisplay();   // Clear the buffer.
   display.drawBitmap(0, 0, myBitmap, 128, 64, WHITE);
   display.display(); // update display with new data
-  delay(2000); // display splash screen for 2 seconds
-  display.setFont(&TomThumb);
-  display.setTextSize(1);
+  delay(700); // display splash screen
+  //display.setFont(&TomThumb);
+  display.setTextSize(0);
   display.setTextColor(WHITE);
 
 // Turn off all LEDs  
@@ -297,25 +318,64 @@ void loop(){
     digitalWrite(R_LED, LOW); // Turn off the Red LED
   }
   
-  display.clearDisplay();
-  display.setCursor(0,7); 
-  display.print("Buttons:  ");
-  display.println(buttons);
-  display.print("Buttons2:  ");
-  display.println(buttons2);
-  display.print("Channel:  ");
-  display.println(txChannel);
-  display.display();
+  //display.clearDisplay();
+  //display.setCursor(0,7); 
+  //display.print("Buttons:  ");
+  //display.println(buttons);
+  //display.print("Buttons2:  ");
+  //display.println(buttons2);
+  //display.print("Channel:  ");
+  //display.println(txChannel);
+  //display.display();
   
 // ================================================================
 // ===                    Send Data to Robot                    ===
 // ================================================================
 
   sendBuffer[0] = buttons; // Set the sendBuffer to the button state
-  sendBuffer[1] = buttons2; // Set the sendBuffer to the button state
+  //sendBuffer[1] = rcvBuffer[0]; // Set the sendBuffer to the button state
+  sendBuffer[1] = loopTime; // Set the sendBuffer to the button state
   nrf24.send(sendBuffer, sizeof(sendBuffer)); // Send the buffer
   nrf24.waitPacketSent();   // Wait for the radio to finish transmitting
-  delay(20);
+// ================================================================
+// ===                  Read Data From Robot                    ===
+// ================================================================  
+  if (nrf24.waitAvailableTimeout(1)) // The wait time needs to be as low as possible so as to not impair the responsivness of the manual controls
+  { 
+      nrf24.recv(rcvBuffer, &len);
+      rcvState = true;
+  } 
+  else
+  {
+    rcvState = false;
+  }
+// ================================================================
+// ===                       Update Display                     ===
+// ================================================================  
+  loopTime = millis() - lastMillis;
+  lastMillis = millis();
 
+
+  if (!digitalRead(PIN_E))
+  {
+    display.clearDisplay();
+    display.setCursor(0,7); 
+    display.print("Buttons:  ");
+    display.println(buttons);
+    display.print("Buttons2: ");
+    display.println(buttons2);
+    display.print("Channel:  ");
+    display.println(txChannel);
+    display.print("LoopTime: ");
+    display.println(loopTime);
+    display.print("RcvBuffer0: ");
+    display.println(rcvBuffer[0]);
+    display.print("RcvBuffer1: ");
+    display.println(rcvBuffer[1]);
+    display.print("RcvState:  ");
+    display.println(rcvState);
+  
+    display.display();
+  }
 } // End main loop
 
